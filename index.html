@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -17,12 +18,12 @@ button{cursor:pointer;background:var(--ac);color:#fff;border:0}
 #hint{position:fixed;left:12px;bottom:12px;font-size:12px;opacity:.7;display:none;max-width:60ch}
 </style></head><body>
 <div id="ui"><h1>LAB BREACH</h1>
-<p>Gorilla-style VR: swing your arms and push off floors, benches, crates and walls. Join a room code; when 2 players vote, one becomes the monster. Arms rip off without killing; lose your head or get torn in half and you are out. The first player to enter a code hosts the room; friends who enter the same code join them directly (peer to peer, no game server). If the host leaves, the room ends. Turn sound on.</p>
+<p>Gorilla-style VR with extended arm reach: swing and push off floors, benches, crates and walls, or hold grip on a surface to latch on and climb hand over hand. As the monster, grip near a body part grabs it instead. Join a room code; when 2 players vote, one becomes the monster. Arms rip off without killing; lose your head or get torn in half and you are out. The first player to enter a code hosts the room; friends who enter the same code join them directly (peer to peer, no game server). If the host leaves, the room ends. Turn sound on.</p>
 <input id="code" placeholder="Room code (blank = new)" maxlength="8">
 <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button id="join">Join / create room</button><button id="prac">Monster practice</button></div>
 <p id="msg"></p></div>
 <button id="vr">Enter VR</button>
-<div id="hint">Desktop: click to look, WASD move, Space jump, Q/E grip left/right hand, hold R to pull hands back. Hover a part until the hand glows, grip, then pull away.</div>
+<div id="hint">Desktop: click to look, WASD + Shift move, Space jump, Q/E grip left/right hand, hold R to pull hands back. Hover a part until the hand glows, grip, then pull away.</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -72,20 +73,40 @@ const fx=new T.Mesh(new T.PlaneGeometry(3,3),new T.MeshBasicMaterial({color:0x88
 let phase='lobby',mode='',net=null,myId=null,isMon=false,monId=null,roundT=0,dead=false,arms=[1,1],vote=0,held=null,msgT='',msgU=0,vCool=0,sCool=0,holds=[null,null],room='',needPrev=1,hbT=0,bT=0;
 const vel=new V(),avs=new Map(),say=t=>{msgT=t;msgU=performance.now()+6000};
 const camW=()=>cam.getWorldPosition(new V()),buzz=(h,s,d)=>{try{h.src.gamepad.hapticActuators[0].pulse(s,d)}catch(e){}};
-const hands=[0,1].map(i=>{const c=R.xr.getController(i);rig.add(c);c.add(new T.Mesh(new T.SphereGeometry(.07),mat(0x889988,0x222222)));c.hd=i?'right':'left';c.cur=new V();c.prev=new V();c.sv=new V();c.g=0;c.lg=0;c.t=0;
+const hands=[0,1].map(i=>{const c=R.xr.getController(i);rig.add(c);c.hd=i?'right':'left';c.cur=new V();c.prev=new V();c.pv=new V();c.sv=new V();c.sl=new V();c.an=new V();c.g=0;c.lg=0;c.t=0;c.lat=0;c.has=0;
+c.mesh=new T.Mesh(new T.SphereGeometry(.09),mat(0x889988,0x222222));S.add(c.mesh);
 c.addEventListener('connected',e=>{if(e.data){c.src=e.data;if(e.data.handedness)c.hd=e.data.handedness}});
 ['selectstart','squeezestart'].forEach(e=>c.addEventListener(e,()=>c.g=1));['selectend','squeezeend'].forEach(e=>c.addEventListener(e,()=>c.g=0));return c});
 const H=()=>[hands.find(h=>h.hd=='left')||hands[0],hands.find(h=>h.hd=='right')||hands[1]];
-// ---- physics ----
-const touch=p=>{const r=.13*rig.scale.x;return p.y<r||col.some(c=>p.x>c[0]-r&&p.x<c[1]+r&&p.y>c[2]-r&&p.y<c[3]+r&&p.z>c[4]-r&&p.z<c[5]+r)};
-const tp=(x,y,z)=>{rig.position.set(x,y,z);vel.set(0,0,0);needPrev=1};
-let onG=0;
-function body(){const p=rig.position,s=rig.scale.x,r=.3*s;onG=0;
-for(const c of col){if(p.x>c[0]-r&&p.x<c[1]+r&&p.z>c[4]-r&&p.z<c[5]+r&&p.y<c[3]-.01&&p.y+1.2*s>c[2]){
-if(c[3]-p.y<.4){p.y=c[3];if(vel.y<0)vel.y=0;onG=1}else{const a=[p.x-(c[0]-r),c[1]+r-p.x,p.z-(c[4]-r),c[5]+r-p.z],m=Math.min(...a);
-if(m==a[0]){p.x=c[0]-r;vel.x=Math.min(vel.x,0)}else if(m==a[1]){p.x=c[1]+r;vel.x=Math.max(vel.x,0)}else if(m==a[2]){p.z=c[4]-r;vel.z=Math.min(vel.z,0)}else{p.z=c[5]+r;vel.z=Math.max(vel.z,0)}}}}
-if(p.y<0){p.y=0;if(vel.y<0)vel.y=0;onG=1}if(onG){vel.x*=.92;vel.z*=.92}
-if(p.y<LY-3){p.x=Math.max(-29.5,Math.min(29.5,p.x));p.z=Math.max(-29.5,Math.min(29.5,p.z))}}
+// ---- physics (arm-extension, sphere collision, grip climbing) ----
+const _o=new V(),_c=new V(),_h=new V(),_w=new V(),_d=new V(),_m=new V(),_m2=new V(),_v=new V(),velS=new V(),ARM=1.55,HR=.09,BODY_VR=[[0,.2],[-.3,.2],[-.6,.2]],BODY_DK=[[0,.25],[-.6,.25],[-1.3,.25]];let wasL=0;
+const tp=(x,y,z)=>{rig.position.set(x,y,z);vel.set(0,0,0);velS.set(0,0,0);needPrev=1};
+function cs(c,r,out){out.set(0,0,0);let t=false;if(c.y-r<0){out.y+=r-c.y;t=true}
+for(const b of col){if(c.x+r<b[0]||c.x-r>b[1]||c.y+r<b[2]||c.y-r>b[3]||c.z+r<b[4]||c.z-r>b[5])continue;
+const qx=Math.max(b[0],Math.min(c.x,b[1])),qy=Math.max(b[2],Math.min(c.y,b[3])),qz=Math.max(b[4],Math.min(c.z,b[5])),dx=c.x-qx,dy=c.y-qy,dz=c.z-qz,d2=dx*dx+dy*dy+dz*dz;
+if(d2<r*r){t=true;if(d2>1e-8){const d=Math.sqrt(d2),k=(r-d)/d;out.x+=dx*k;out.y+=dy*k;out.z+=dz*k}
+else{const ex=Math.min(c.x-b[0],b[1]-c.x),ey=Math.min(c.y-b[2],b[3]-c.y),ez=Math.min(c.z-b[4],b[5]-c.z);
+if(ey<=ex&&ey<=ez)out.y+=(c.y-b[2]<b[3]-c.y?-(ey+r):(ey+r));else if(ex<=ez)out.x+=(c.x-b[0]<b[1]-c.x?-(ex+r):(ex+r));else out.z+=(c.z-b[4]<b[5]-c.z?-(ez+r):(ez+r))}}}
+return t}
+function resolveBody(offs){let g=false;const s=rig.scale.x;for(let k=0;k<3;k++){rig.updateMatrixWorld(true);_h.copy(cam.position).applyMatrix4(rig.matrixWorld);let mv=false;
+for(const o of offs){_c.set(_h.x,_h.y+o[0]*s,_h.z);if(cs(_c,o[1]*s,_o)){rig.position.add(_o);_h.add(_o);mv=true;const l=_o.length();if(l>1e-6){const nx=_o.x/l,ny=_o.y/l,nz=_o.z/l,vn=vel.x*nx+vel.y*ny+vel.z*nz;if(vn<0){vel.x-=vn*nx;vel.y-=vn*ny;vel.z-=vn*nz}if(ny>.5)g=true}}}
+if(!mv)break}return g}
+const sh=h=>{_v.copy(cam.position);_v.y-=.2;return h.sl.copy(h.position).sub(_v).multiplyScalar(ARM).add(_v)};
+function vr(dt,hs){rig.updateMatrixWorld(true);_m.set(0,0,0);_m2.set(0,0,0);let n=0,nl=0;const s=rig.scale.x;
+hs.forEach((h,i)=>{const l=sh(h);if(!h.has){h.prev.copy(l);h.has=1}_w.copy(l).applyMatrix4(rig.matrixWorld);
+const live=arms[i]&&!held,tc=cs(_w,HR*s+.01,_o),canL=!isMon||(!holds[i]&&!h.hv);
+if(!live||!h.g)h.lat=0;
+if(h.g&&!h.lat&&tc&&live&&canL){h.lat=1;h.an.copy(_w).add(_o);snd.hit(3);buzz(h,.7,60)}
+if(h.lat){_d.copy(h.an).sub(_w);_m2.add(_d);nl++}
+else if(tc&&live){_d.copy(l).sub(h.prev);if(_d.length()>.4)_d.setLength(.4);_d.applyQuaternion(rig.quaternion).multiplyScalar(s);_m.sub(_d);n++;
+if(!h.t){const sp=_d.length()/Math.max(dt,.001);snd.hit(sp);buzz(h,Math.min(1,.2+sp*.08),40)}}
+h.t=tc&&live;h.prev.copy(l)});
+if(held)vel.set(0,0,0);
+else if(nl>0){_m2.multiplyScalar(1/nl);if(_m2.length()>1)_m2.setLength(1);rig.position.add(_m2);_v.copy(_m2).divideScalar(Math.max(dt,1/144));velS.lerp(_v,.4);vel.set(0,0,0);wasL=1}
+else{if(wasL){wasL=0;vel.copy(velS);if(vel.length()>14)vel.setLength(14)}
+if(n>0){_m.multiplyScalar(1/n);rig.position.add(_m);_v.copy(_m).divideScalar(Math.max(dt,1/144));velS.lerp(_v,.6);vel.copy(velS);if(vel.length()>14)vel.setLength(14)}
+else{vel.y-=9.8*dt;vel.multiplyScalar(1-.08*dt);if(vel.length()>16)vel.setLength(16);rig.position.addScaledVector(vel,dt);velS.copy(vel)}}
+const g=resolveBody(BODY_VR);if(g&&n==0&&nl==0){const f=Math.max(0,1-6*dt);vel.x*=f;vel.z*=f}return g}
 // ---- effects ----
 const N=600,bp=new Float32Array(N*3).fill(-100),bv=new Float32Array(N*3),bl=new Float32Array(N);let bi=0;
 const bg=new T.BufferGeometry();bg.setAttribute('position',new T.BufferAttribute(bp,3));
@@ -116,10 +137,10 @@ function doRip(to,part){const p=partPos(to,part);if(!p)return;const kill=part=='
 if(to==myId){held=null;fx.material.opacity=.7;if(kill)die();else arms[i]=0}else{const a=avs.get(to);if(a&&a.dummy){a.held=a.pin=0;if(kill){a.alive=0;a.dt=performance.now()}else a.arms[i]=0}}}
 function rip(a,part){a.dummy?doRip(a.id,part):net.emit('rip',{to:a.id,part})}
 const pick=h=>{let best=.6*rig.scale.x,bp=null,ba=null;for(const a of avs.values()){if(!a.alive)continue;for(const p of ['h','t','l','r']){if((p=='l'&&!a.arms[0])||(p=='r'&&!a.arms[1]))continue;const d=a.P[p].distanceTo(h.cur);if(d<best){best=d;bp=p;ba=a}}}return bp&&{a:ba,p:bp}};
-function monster(hs,now){hs.forEach((h,i)=>{const k=holds[i],c=!k&&pick(h),m=h.children[0].material;m.emissive.setHex(k?0xff0000:c?0xffaa00:0x222222);if(c&&!h.hv)buzz(h,.3,25);h.hv=!!c;
+function monster(hs,now){hs.forEach((h,i)=>{const k=holds[i],c=!k&&pick(h),m=h.mesh.material;m.emissive.setHex(k?0xff0000:c?0xffaa00:0x222222);if(c&&!h.hv)buzz(h,.3,25);h.hv=!!c;
 if(!k){if(c&&h.g&&!h.lg){holds[i]={a:c.a,p:c.p,t:now,d0:c.a.P[c.p].distanceTo(h.cur)};snd.grab(h.cur);buzz(h,.7,80);
 if(c.a.dummy){c.a.held=c.p=='t'?1:0;c.a.pin=1;c.a.hd=i}else net.emit('grab',{to:c.a.id,hd:i,pt:c.p})}}
-else if(!h.g){const a=k.a,th=k.p=='t',v=th?h.sv.clone().add(vel).multiplyScalar(1.6):new V();if(th&&v.length()>3)snd.throw();
+else if(!h.g){const a=k.a,th=k.p=='t',v=th?h.sv.clone().multiplyScalar(1.5):new V();if(th&&v.length()>3)snd.throw();
 if(a.dummy){a.held=a.pin=0;a.vel.copy(v)}else net.emit('rel',{to:a.id,v:[v.x,v.y,v.z].map(n=>+n.toFixed(1))});holds[i]=null}
 else{const d=now-k.t;let pr=0;
 if(k.p=='t'){const o=holds[1-i];if(o&&o.a==k.a&&o.p=='t')pr=(hs[0].cur.distanceTo(hs[1].cur)-.3)/.65;if(pr>=1)rip(k.a,'T')}
@@ -130,25 +151,26 @@ h.lg=h.g})}
 const keys={};addEventListener('keydown',e=>keys[e.code]=1);addEventListener('keyup',e=>keys[e.code]=0);let yaw=0,pit=0;
 R.domElement.addEventListener('click',()=>!R.xr.isPresenting&&R.domElement.requestPointerLock&&R.domElement.requestPointerLock());
 addEventListener('mousemove',e=>{if(document.pointerLockElement){yaw-=e.movementX*.002;pit=Math.max(-1.4,Math.min(1.4,pit-e.movementY*.002))}});
-function desk(dt,hs){cam.position.set(0,1.6,0);cam.rotation.set(pit,yaw,0,'YXZ');const f=new V(-Math.sin(yaw),0,-Math.cos(yaw)),r=new V(Math.cos(yaw),0,-Math.sin(yaw));
-if(!held){const m=new V();if(keys.KeyW)m.add(f);if(keys.KeyS)m.sub(f);if(keys.KeyD)m.add(r);if(keys.KeyA)m.sub(r);m.normalize().multiplyScalar(5);vel.x=m.x;vel.z=m.z;if(keys.Space&&onG)vel.y=5.5}
-const fw=new V(-Math.sin(yaw)*Math.cos(pit),Math.sin(pit),-Math.cos(yaw)*Math.cos(pit)),yk=keys.KeyR?-.9:0;
-hs.forEach((h,i)=>{h.position.set(i?.25:-.25,1.4,0).addScaledVector(fw,.6+yk);h.g=i?(keys.KeyE?1:0):(keys.KeyQ?1:0)});vel.y-=9.8*dt;rig.position.addScaledVector(vel,dt)}
-let tcool=0;function turn(){const s=R.xr.getSession();if(!s)return false;for(const i of s.inputSources){if(i.handedness=='right'&&i.gamepad){const x=i.gamepad.axes[2]||0;if(Math.abs(x)<.4)tcool=0;else if(Math.abs(x)>.7&&!tcool){tcool=1;const a=-Math.sign(x)*Math.PI/6,hp=camW();rig.position.copy(hp).add(rig.position.clone().sub(hp).applyAxisAngle(Y,a));rig.rotation.y+=a;return true}}}return false}
+function desk(dt,hs){cam.position.set(0,1.6,0);cam.rotation.set(pit,yaw,0,'YXZ');rig.updateMatrixWorld(true);
+const fw=new V(-Math.sin(yaw)*Math.cos(pit),Math.sin(pit),-Math.cos(yaw)*Math.cos(pit)),r=new V(Math.cos(yaw),0,-Math.sin(yaw)),yk=keys.KeyR?-.9:0;
+hs.forEach((h,i)=>{h.position.set(i?.25:-.25,1.4,0).addScaledVector(fw,.6+yk);h.g=i?(keys.KeyE?1:0):(keys.KeyQ?1:0)});
+if(held)vel.set(0,0,0);else{const f=(keys.KeyW?1:0)-(keys.KeyS?1:0),sd=(keys.KeyD?1:0)-(keys.KeyA?1:0),sp=(keys.ShiftLeft?9:5)*rig.scale.x,k=Math.min(1,10*dt);
+vel.x+=((-Math.sin(yaw)*f+Math.cos(yaw)*sd)*sp-vel.x)*k;vel.z+=((-Math.cos(yaw)*f-Math.sin(yaw)*sd)*sp-vel.z)*k;vel.y-=9.8*dt;rig.position.addScaledVector(vel,dt)}
+const g=resolveBody(BODY_DK);if(g&&keys.Space&&!held)vel.y=6.8;return g}
+let tcool=0;function turn(){const s=R.xr.getSession();if(!s)return;for(const i of s.inputSources){if(i.handedness=='right'&&i.gamepad){const x=i.gamepad.axes[2]||0;if(Math.abs(x)<.4)tcool=0;else if(Math.abs(x)>.7&&!tcool){tcool=1;snap(x>0?-Math.PI/6:Math.PI/6)}}}}
+function snap(a){rig.updateMatrixWorld(true);_v.copy(cam.position).applyMatrix4(rig.matrixWorld);rig.rotation.y+=a;rig.updateMatrixWorld(true);_w.copy(cam.position).applyMatrix4(rig.matrixWorld);rig.position.add(_v.sub(_w))}
 // ---- main loop ----
 let tPrev=0,uT=0;
 R.setAnimationLoop(t=>{const dt=Math.min((t-tPrev)/1000||.016,.05);tPrev=t;if(mode)frame(dt,t);R.render(S,cam)});
 function frame(dt,now){const hs=H(),xr=R.xr.isPresenting;
 if(net&&!myId){const p=net.peers().find(p=>p.isMe&&p.sameTab);if(p)myId=p.peer}
-if(xr){if(turn())needPrev=1}else desk(dt,hs);
-rig.updateMatrixWorld(true);hs.forEach(h=>h.getWorldPosition(h.cur));if(needPrev){hs.forEach(h=>{h.prev.copy(h.cur);h.sv.set(0,0,0)});needPrev=0}
-hs.forEach(h=>h.sv.lerp(h.cur.clone().sub(h.prev).divideScalar(dt),.5));
-if(net){syncPeers();if(held){const a=avs.get(held.by);if(!a)held=null;else if(held.pt=='t'){const tgt=a.P[held.hd?'r':'l'],tc=camW();tc.y-=.4;rig.position.add(tgt.clone().sub(tc));vel.set(0,0,0)}else vel.set(0,0,0)}}
-const tc=hs.map(h=>touch(h.cur));hs.forEach((h,i)=>{if(tc[i]&&!h.t){snd.hit(h.sv.length());buzz(h,.4,40)}h.t=tc[i]});
-if(!held){if(xr){const d=new V();let n=0;hs.forEach((h,i)=>{if(arms[i]&&tc[i]){d.add(h.prev).sub(h.cur);n++}});
-if(n){d.divideScalar(n);rig.position.add(d);vel.lerp(d.clone().divideScalar(dt).multiplyScalar(1.15),.7);if(vel.length()>13)vel.setLength(13)}else{vel.y-=9.8*dt;vel.multiplyScalar(1-.1*dt);rig.position.addScaledVector(vel,dt)}}body()}
+if(xr)turn();
+if(net){syncPeers();if(held){const a=avs.get(held.by);if(!a)held=null;else if(held.pt=='t'){const tgt=a.P[held.hd?'r':'l'],tc=camW();tc.y-=.4;rig.position.add(tgt.clone().sub(tc))}}}
+xr?vr(dt,hs):desk(dt,hs);rig.updateMatrixWorld(true);
+hs.forEach(h=>{_w.copy(xr?sh(h):h.position).applyMatrix4(rig.matrixWorld);if(cs(_w,HR*rig.scale.x,_o))_w.add(_o);h.cur.copy(_w);h.mesh.position.copy(_w);h.mesh.scale.setScalar(rig.scale.x);
+if(needPrev){h.pv.copy(_w);h.sv.set(0,0,0)}h.sv.lerp(_v.copy(_w).sub(h.pv).divideScalar(dt),.5);h.pv.copy(_w)});needPrev=0;
 if(phase=='lobby'||dead){if(rig.position.y>LY-1){rig.position.x=Math.max(-5.7,Math.min(5.7,rig.position.x));rig.position.z=Math.max(-5.7,Math.min(5.7,rig.position.z))}else if(rig.position.y<LY-3)tp(0,LY+.5,3)}
-if(isMon&&phase=='play')monster(hs,now);else hs.forEach(h=>h.children[0].material.emissive.setHex(0x222222));
+if(isMon&&phase=='play')monster(hs,now);else hs.forEach(h=>h.mesh.material.emissive.setHex(0x222222));
 if(mode=='prac')avs.forEach(a=>updDummy(a,dt,now));
 if(net){const q=v=>[+v.x.toFixed(2),+v.y.toFixed(2),+v.z.toFixed(2)];net.presence({h:q(camW()),l:q(hs[0].cur),r:q(hs[1].cur),a:arms.join(''),m:isMon?1:0,al:dead?0:1,v:vote})}
 if(phase=='lobby'&&net&&now>vCool&&hs.some(h=>h.cur.distanceTo(orb.position)<.45)){vote^=1;vCool=now+1000;snd.vote();buzz(hs[0],.5,60);orb.material.emissive.set(vote?0x00cc00:0xcc0000)}
@@ -159,7 +181,7 @@ if(now-uT>400){uT=now;ui(now)}
 for(let i=0;i<N;i++)if(bl[i]>0){const j=i*3;if(bp[j+1]>.03){bv[j+1]-=9.8*dt;bp[j]+=bv[j]*dt;bp[j+1]+=bv[j+1]*dt;bp[j+2]+=bv[j+2]*dt;if(bp[j+1]<.03)bp[j+1]=.03}bl[i]-=dt;if(bl[i]<=0)bp[j+1]=-100}
 bg.attributes.position.needsUpdate=true;
 chunks.forEach(m=>{m.v.y-=9.8*dt;m.position.addScaledVector(m.v,dt);m.rotation.x+=dt*4;if(m.position.y<.08){m.position.y=.08;m.v.multiplyScalar(.4)}});
-rig.updateMatrixWorld(true);hs.forEach(h=>h.getWorldPosition(h.prev))}
+}
 function syncPeers(){const seen=new Set();for(const p of net.peers()){if(p.isMe)continue;const d=p.presence;if(!d.h)continue;seen.add(p.peer);let a=avs.get(p.peer);if(!a){a=mkAv(p.peer);avs.set(p.peer,a)}const s=d.a||'11';a.arms=[+s[0],+s[1]];a.mon=d.m;a.alive=d.al;setAv(a,d.h,d.l,d.r)}
 for(const[id,a]of avs)if(!a.dummy&&!seen.has(id)){S.remove(a.g);avs.delete(id)}}
 function ui(now){const L=[];if(now<msgU)L.push(msgT);else L.push(phase=='lobby'?'Lobby':isMon?'MONSTER':dead?'Dead':'Survive');
