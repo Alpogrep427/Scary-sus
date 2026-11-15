@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dark Forest</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#e9efe6;--fg:#1a2418;--ac:#a00;--card:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#050805;--fg:#cfe3c8;--ac:#d22;--card:#0d130c}}
+:root[data-theme="dark"]{--bg:#050805;--fg:#cfe3c8;--ac:#d22;--card:#0d130c}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;overflow:hidden}
+canvas{display:block}
+#ui{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:var(--bg);text-align:center;padding:16px;overflow:auto}
+#ui h1{margin:0;font-size:clamp(28px,8vw,56px);letter-spacing:.15em;color:var(--ac)}
+#ui p{max-width:520px;margin:0;font-size:14px;line-height:1.5;opacity:.85}
+input,button{font:inherit;padding:10px 16px;border-radius:8px;border:1px solid var(--ac);background:var(--card);color:var(--fg)}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}
+#vr{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);display:none;z-index:5}
+#hint{position:fixed;left:12px;bottom:12px;font-size:12px;opacity:.7;display:none;max-width:60ch}
+</style></head><body>
+<div id="ui"><h1>DARK FOREST</h1>
+<p>Gorilla-style VR movement: swing your arms and push off the ground and trees. Join a room code with friends. When two players vote, one becomes the monster. Survivors lose arms to rips, but die only when they lose their head or are torn in half.</p>
+<input id="code" placeholder="Room code (blank = new)" maxlength="8">
+<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button id="join">Join / create room</button><button id="prac">Monster practice</button></div>
+<p id="msg"></p></div>
+<button id="vr">Enter VR</button>
+<div id="hint">Desktop: click to look, WASD move, Space jump, Q/E left/right grip, hold R to pull hands back (yank).</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const T=THREE,V=T.Vector3,$=i=>document.getElementById(i),Y=new V(0,1,0),LY=40;
+const R=new T.WebGLRenderer({antialias:true});R.setSize(innerWidth,innerHeight);R.setPixelRatio(Math.min(devicePixelRatio,2));R.xr.enabled=true;document.body.appendChild(R.domElement);
+const S=new T.Scene();S.background=new T.Color(0x010203);S.fog=new T.FogExp2(0x010203,.08);
+const cam=new T.PerspectiveCamera(70,innerWidth/innerHeight,.05,200),rig=new T.Group();rig.add(cam);S.add(rig);
+addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+S.add(new T.AmbientLight(0x223322,.5));const moon=new T.DirectionalLight(0x445577,.35);moon.position.set(5,20,5);S.add(moon);
+const torch=new T.PointLight(0xaabb99,.9,14);cam.add(torch);
+const mat=(c,e)=>new T.MeshStandardMaterial({color:c,roughness:.9,emissive:e||0});
+// world
+const gr=new T.Mesh(new T.PlaneGeometry(300,300),mat(0x0b1a0b));gr.rotation.x=-Math.PI/2;S.add(gr);
+let seed=7;const rnd=()=>(seed=seed*16807%2147483647)/2147483647,trees=[];
+const tm=new T.InstancedMesh(new T.CylinderGeometry(.3,.45,16,6),mat(0x1a120b),170),cm=new T.InstancedMesh(new T.ConeGeometry(3,9,6),mat(0x07140a),170);
+for(let i=0;i<170;i++){let x,z;do{x=(rnd()-.5)*120;z=(rnd()-.5)*120}while(Math.hypot(x,z)<9);trees.push([x,z]);tm.setMatrixAt(i,new T.Matrix4().makeTranslation(x,8,z));cm.setMatrixAt(i,new T.Matrix4().makeTranslation(x,17,z))}
+S.add(tm,cm);
+const plat=new T.Mesh(new T.BoxGeometry(12,.4,12),mat(0x222a24));plat.position.y=LY-.2;S.add(plat);
+const lobbyLight=new T.PointLight(0xffeedd,1,25);lobbyLight.position.set(0,LY+4,0);S.add(lobbyLight);
+const orb=new T.Mesh(new T.SphereGeometry(.2,16,16),mat(0x550000,0xcc0000));orb.position.set(0,LY+1.1,-2.5);S.add(orb);
+function sign(w,h,sc){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d'),t=new T.CanvasTexture(c),m=new T.Mesh(new T.PlaneGeometry(sc,sc*h/w),new T.MeshBasicMaterial({map:t,transparent:true}));
+m.draw=(L,col)=>{x.clearRect(0,0,w,h);x.fillStyle='rgba(0,0,0,.65)';x.fillRect(0,0,w,h);x.fillStyle=col||'#d8e8d0';x.font='bold '+Math.min(h/(L.length+1),38)+'px sans-serif';x.textAlign='center';L.forEach((l,i)=>x.fillText(l,w/2,(i+.9)*h/(L.length+.3)));t.needsUpdate=true};return m}
+const lsign=sign(512,256,3.5);lsign.position.set(0,LY+2.2,-5);S.add(lsign);
+const hud=sign(512,128,.55);hud.position.set(0,.3,-.9);hud.material.depthTest=false;hud.renderOrder=99;cam.add(hud);
+// state
+let phase='lobby',mode='',net=null,myId=null,isMon=false,monId=null,roundT=0,dead=false,arms=[1,1],vote=0,held=null,msgT='',msgU=0,vCool=0,sCool=0,holds=[null,null],room='';
+const vel=new V(),avs=new Map(),say=t=>{msgT=t;msgU=performance.now()+6000};
+// hands
+const hands=[0,1].map(i=>{const c=R.xr.getController(i);rig.add(c);c.add(new T.Mesh(new T.SphereGeometry(.07),mat(0x889988,0x222222)));c.hd=i?'right':'left';c.cur=new V();c.prev=new V();c.sv=new V();c.g=0;c.lg=0;
+c.addEventListener('connected',e=>{if(e.data&&e.data.handedness)c.hd=e.data.handedness});
+['selectstart','squeezestart'].forEach(e=>c.addEventListener(e,()=>c.g=1));['selectend','squeezeend'].forEach(e=>c.addEventListener(e,()=>c.g=0));return c});
+const H=()=>[hands.find(h=>h.hd=='left')||hands[0],hands.find(h=>h.hd=='right')||hands[1]];
+// blood
+const N=500,bp=new Float32Array(N*3).fill(-100),bv=new Float32Array(N*3),bl=new Float32Array(N);let bi=0;
+const bg=new T.BufferGeometry();bg.setAttribute('position',new T.BufferAttribute(bp,3));
+const bpts=new T.Points(bg,new T.PointsMaterial({color:0xaa0000,size:.08}));bpts.frustumCulled=false;S.add(bpts);
+function blood(p,n,sp){for(let k=0;k<n;k++){const j=bi*3;bp[j]=p.x;bp[j+1]=p.y;bp[j+2]=p.z;bv[j]=(Math.random()-.5)*sp;bv[j+1]=Math.random()*sp;bv[j+2]=(Math.random()-.5)*sp;bl[bi]=9;bi=(bi+1)%N}}
+const chunks=[];
+function chunk(p,part){const g=part=='h'?new T.SphereGeometry(.13):part=='T'?new T.BoxGeometry(.32,.3,.18):new T.CylinderGeometry(.05,.04,.5),m=new T.Mesh(g,mat(0x6a1212));m.position.copy(p);m.v=new V((Math.random()-.5)*3,2+Math.random()*2,(Math.random()-.5)*3);S.add(m);chunks.push(m);if(chunks.length>30)S.remove(chunks.shift())}
+// physics helpers
+const fl=p=>p.y>LY-1&&Math.abs(p.x)<6.2&&Math.abs(p.z)<6.2?LY:0;
+const touch=p=>p.y<fl(p)+.12||(p.y<16&&trees.some(t=>Math.hypot(p.x-t[0],p.z-t[1])<.5));
+const tp=(x,y,z)=>{rig.position.set(x,y,z);vel.set(0,0,0)};
+const camW=()=>cam.getWorldPosition(new V());
+// avatars
+function mkAv(id,dummy){const g=new T.Group(),c=dummy?0x667766:0x7788aa,m=()=>mat(c),head=new T.Mesh(new T.SphereGeometry(.12,12,12),m()),tor=new T.Mesh(new T.BoxGeometry(.32,.5,.18),m()),hl=new T.Mesh(new T.SphereGeometry(.07),m()),hr=hl.clone(),ll=new T.Mesh(new T.CylinderGeometry(.04,.04,1),m()),lr=ll.clone();
+g.add(head,tor,hl,hr,ll,lr);S.add(g);return{id,dummy,g,head,tor,hl,hr,ll,lr,P:{h:new V(),t:new V(),l:new V(),r:new V()},arms:[1,1],alive:1,mon:0,vel:new V(),held:0}}
+function limb(m,a,b){m.position.copy(a).add(b).multiplyScalar(.5);m.scale.set(1,Math.max(a.distanceTo(b),.01),1);m.quaternion.setFromUnitVectors(Y,b.clone().sub(a).normalize())}
+function setAv(a,h,l,r){const P=a.P,s=a.mon?1.25:1;P.h.set(...h);P.l.set(...l);P.r.set(...r);P.t.copy(P.h);P.t.y-=.4;
+a.head.position.copy(P.h);a.tor.position.copy(P.t);a.hl.position.copy(P.l);a.hr.position.copy(P.r);
+[a.head,a.tor,a.hl,a.hr].forEach(m=>{m.scale.setScalar(s);if(a.mon)m.material.color.set(0x992222)});
+a.hl.visible=a.ll.visible=!!a.arms[0];a.hr.visible=a.lr.visible=!!a.arms[1];
+limb(a.ll,P.h.clone().add(new V(-.2*s,-.2,0)),P.l);limb(a.lr,P.h.clone().add(new V(.2*s,-.2,0)),P.r)}
+function mkDummy(i,x,z){const a=mkAv('d'+i,1);a.p=new V(x,0,z);a.x0=x;a.z0=z;a.i=i;avs.set(a.id,a)}
+function updDummy(a,dt,t){if(!a.alive){a.g.visible=false;if(t-a.dt>3000){a.alive=1;a.arms=[1,1];a.p.set(a.x0,0,a.z0);a.vel.set(0,0,0)}return}
+a.g.visible=true;const p=a.p;if(a.held){p.copy(H()[a.hd].cur);p.y-=1.15}else{a.vel.y-=9.8*dt;p.addScaledVector(a.vel,dt);if(p.y<0){p.y=0;a.vel.y=0;a.vel.x*=.85;a.vel.z*=.85}}
+const s=Math.sin(t/700+a.i)*.08;setAv(a,[p.x,p.y+1.55,p.z],[p.x-.3,p.y+.95+s,p.z],[p.x+.3,p.y+.95-s,p.z])}
+// round events
+function onStart(m){phase='play';roundT=performance.now();monId=m;isMon=m==myId;dead=false;arms=[1,1];vote=0;held=null;holds=[null,null];rig.scale.setScalar(isMon?1.25:1);const a=Math.random()*6.28;
+isMon?tp(0,0,45):tp(Math.cos(a)*15,0,Math.sin(a)*15-10);say(isMon?'YOU ARE THE MONSTER':'RUN. A monster is loose.')}
+function endRound(t){if(phase!='play')return;phase='lobby';isMon=false;dead=false;arms=[1,1];vote=0;held=null;holds=[null,null];rig.scale.setScalar(1);tp(0,LY+.2,3);say(t)}
+function die(){dead=true;held=null;rig.scale.setScalar(1);tp(0,LY+.2,3);say('You died. Wait in the lobby for the round to end.')}
+function partPos(id,part){if(id==myId){const h=camW(),L=H();return part=='l'?L[0].cur.clone():part=='r'?L[1].cur.clone():part=='h'?h:h.setY(h.y-.4)}const a=avs.get(id);return a?a.P[part=='T'?'t':part].clone():null}
+function doRip(to,part){const p=partPos(to,part);if(!p)return;blood(p,part=='T'||part=='h'?160:80,5);chunk(p,part);holds=holds.map(k=>k&&k.a.id==to?null:k);
+const kill=part=='h'||part=='T',i=part=='l'?0:1;
+if(to==myId){if(kill)die();else arms[i]=0}else{const a=avs.get(to);if(a&&a.dummy){if(kill){a.alive=0;a.held=0;a.dt=performance.now()}else a.arms[i]=0}}}
+function rip(a,part){a.dummy?doRip(a.id,part):net.emit('rip',{to:a.id,part})}
+// monster hands
+function monster(hs,now){hs.forEach((h,i)=>{const k=holds[i];
+if(h.g&&!k&&!h.lg){let best=.42,bp=null,ba=null;for(const a of avs.values()){if(!a.alive)continue;for(const p of ['h','t','l','r']){if((p=='l'&&!a.arms[0])||(p=='r'&&!a.arms[1]))continue;const d=a.P[p].distanceTo(h.cur);if(d<best){best=d;bp=p;ba=a}}}
+if(bp){holds[i]={a:ba,p:bp,t:now};if(bp=='t'||bp=='h'){if(ba.dummy){ba.held=1;ba.hd=i}else net.emit('grab',{to:ba.id,hd:i})}}}
+else if(k&&!h.g){if(k.p=='t'||k.p=='h'){const v=h.sv.clone().add(vel).multiplyScalar(1.6);if(k.a.dummy){k.a.held=0;k.a.vel.copy(v)}else net.emit('rel',{to:k.a.id,v:[v.x,v.y,v.z].map(n=>+n.toFixed(1))})}holds[i]=null}
+else if(k){const sp=h.sv.length(),d=now-k.t;
+if((k.p=='l'||k.p=='r')&&d>450&&sp>2.5)rip(k.a,k.p);
+else if(k.p=='h'&&d>900&&sp>2.5)rip(k.a,'h');
+else if(k.p=='t'&&holds[0]&&holds[1]&&holds[0].a==holds[1].a&&holds[0].p=='t'&&holds[1].p=='t'&&hs[0].cur.distanceTo(hs[1].cur)>.85)rip(k.a,'T')}
+h.lg=h.g})}
+// desktop input
+const keys={};addEventListener('keydown',e=>keys[e.code]=1);addEventListener('keyup',e=>keys[e.code]=0);let yaw=0,pit=0;
+R.domElement.addEventListener('click',()=>!R.xr.isPresenting&&R.domElement.requestPointerLock&&R.domElement.requestPointerLock());
+addEventListener('mousemove',e=>{if(document.pointerLockElement){yaw-=e.movementX*.002;pit=Math.max(-1.4,Math.min(1.4,pit-e.movementY*.002))}});
+function desk(dt,hs){cam.position.set(0,1.6,0);cam.rotation.set(pit,yaw,0,'YXZ');const f=new V(-Math.sin(yaw),0,-Math.cos(yaw)),r=new V(Math.cos(yaw),0,-Math.sin(yaw));
+if(!held){const m=new V();if(keys.KeyW)m.add(f);if(keys.KeyS)m.sub(f);if(keys.KeyD)m.add(r);if(keys.KeyA)m.sub(r);m.normalize().multiplyScalar(5);vel.x=m.x;vel.z=m.z;if(keys.Space&&rig.position.y<=fl(rig.position)+.01)vel.y=5.5}
+const fw=new V(-Math.sin(yaw)*Math.cos(pit),Math.sin(pit),-Math.cos(yaw)*Math.cos(pit)),yk=keys.KeyR?-.9:0;
+hs.forEach((h,i)=>{h.position.set(i?.25:-.25,1.4,0).addScaledVector(fw,.6+yk);h.g=i?(keys.KeyE?1:0):(keys.KeyQ?1:0)});vel.y-=9.8*dt;rig.position.addScaledVector(vel,dt)}
+let tcool=0;function turn(){const s=R.xr.getSession();if(!s)return false;for(const i of s.inputSources){if(i.handedness=='right'&&i.gamepad){const x=i.gamepad.axes[2]||0;if(Math.abs(x)<.4)tcool=0;else if(Math.abs(x)>.7&&!tcool){tcool=1;const a=-Math.sign(x)*Math.PI/6,hp=camW();rig.position.copy(hp).add(rig.position.clone().sub(hp).applyAxisAngle(Y,a));rig.rotation.y+=a;return true}}}return false}
+// main frame
+let tPrev=0,uT=0;
+R.setAnimationLoop(t=>{const dt=Math.min((t-tPrev)/1000||.016,.05);tPrev=t;if(mode){frame(dt,t)}R.render(S,cam)});
+function frame(dt,now){const hs=H(),xr=R.xr.isPresenting;
+if(net&&!myId){const p=net.peers().find(p=>p.isMe&&p.sameTab);if(p)myId=p.peer}
+if(xr){if(turn()){rig.updateMatrixWorld(true);hs.forEach(h=>h.getWorldPosition(h.prev))}}else desk(dt,hs);
+hs.forEach(h=>{h.getWorldPosition(h.cur);h.sv.lerp(h.cur.clone().sub(h.prev).divideScalar(dt),.5)});
+if(net){syncPeers();if(held){const a=avs.get(held.by);if(a){const tgt=a.P[held.hd?'r':'l'],tc=camW();tc.y-=.4;rig.position.add(tgt.clone().sub(tc));vel.set(0,0,0)}else held=null}}
+if(!held&&xr){let d=new V(),n=0;hs.forEach((h,i)=>{if(arms[i]&&touch(h.cur)){d.add(h.prev).sub(h.cur);n++}});
+if(n){d.divideScalar(n);rig.position.add(d);vel.copy(d).divideScalar(dt);if(vel.length()>14)vel.setLength(14)}else{vel.y-=9.8*dt;rig.position.addScaledVector(vel,dt)}}
+const f=fl(rig.position);if(rig.position.y<f){rig.position.y=f;if(vel.y<0)vel.y=0;vel.x*=.9;vel.z*=.9}
+if(phase=='lobby'||dead){if(rig.position.y>LY-1){rig.position.x=Math.max(-5.7,Math.min(5.7,rig.position.x));rig.position.z=Math.max(-5.7,Math.min(5.7,rig.position.z))}else if(rig.position.y<LY-3)tp(0,LY+.5,3)}
+if(isMon&&phase=='play')monster(hs,now);
+if(mode=='prac')avs.forEach(a=>updDummy(a,dt,now));
+if(net){const L=hs[0].cur,Rr=hs[1].cur,q=v=>[+v.x.toFixed(2),+v.y.toFixed(2),+v.z.toFixed(2)];net.presence({h:q(camW()),l:q(L),r:q(Rr),a:arms.join(''),m:isMon?1:0,al:dead?0:1,v:vote})}
+if(phase=='lobby'&&net&&now>vCool&&hs.some(h=>h.cur.distanceTo(orb.position)<.3)){vote^=1;vCool=now+1000;orb.material.emissive.set(vote?0x00cc00:0xcc0000)}
+if(now-uT>400){uT=now;ui(now)}
+for(let i=0;i<N;i++)if(bl[i]>0){const j=i*3;if(bp[j+1]>.03){bv[j+1]-=9.8*dt;bp[j]+=bv[j]*dt;bp[j+1]+=bv[j+1]*dt;bp[j+2]+=bv[j+2]*dt;if(bp[j+1]<.03)bp[j+1]=.03}bl[i]-=dt;if(bl[i]<=0)bp[j+1]=-100}
+bg.attributes.position.needsUpdate=true;
+chunks.forEach(m=>{m.v.y-=9.8*dt;m.position.addScaledVector(m.v,dt);m.rotation.x+=dt*4;if(m.position.y<.08){m.position.y=.08;m.v.multiplyScalar(.4)}});
+rig.updateMatrixWorld(true);hs.forEach(h=>h.getWorldPosition(h.prev))}
+function syncPeers(){const seen=new Set();for(const p of net.peers()){if(p.isMe)continue;const d=p.presence;if(!d.h)continue;seen.add(p.peer);let a=avs.get(p.peer);if(!a){a=mkAv(p.peer);avs.set(p.peer,a)}const s=d.a||'11';a.arms=[+s[0],+s[1]];a.mon=d.m;a.alive=d.al;setAv(a,d.h,d.l,d.r)}
+for(const[id,a]of avs)if(!a.dummy&&!seen.has(id)){S.remove(a.g);avs.delete(id)}}
+function ui(now){const L=[];if(now<msgU)L.push(msgT);else L.push(phase=='lobby'?'Lobby':isMon?'MONSTER':dead?'Dead':'Survive');
+if(phase=='play'&&mode=='mp')L.push('Time '+Math.max(0,Math.ceil(150-(now-roundT)/1000))+'s');L.push('Arms: '+(arms[0]?'L ':'– ')+(arms[1]?'R':'–'));hud.draw(L,isMon?'#ff6666':null);
+if(net){const ps=net.peers().filter(p=>!(p.isMe&&!p.sameTab)),vs=ps.filter(p=>p.presence.v==1).length;
+lsign.draw(['ROOM: '+room.toUpperCase(),'Players: '+ps.length+'   Votes: '+vs+'/2','Touch the red orb to vote','Round: 150s. Monster hunts everyone.'],'#d8e8d0');
+const ids=ps.map(p=>p.peer).sort(),host=ids[0]==myId;
+if(host&&phase=='lobby'&&vs>=2&&now>sCool){sCool=now+4000;const w=ps.filter(p=>p.presence.h);net.emit('start',{m:w[Math.floor(Math.random()*w.length)].peer})}
+if(host&&phase=='play'&&now-roundT>2000){const o=ps.filter(p=>p.peer!=monId);if(!ps.some(p=>p.peer==monId))net.emit('end',{t:'The monster left.'});else if(o.length&&o.every(p=>p.presence.al==0))net.emit('end',{t:'Monster wins. Everyone is dead.'})}
+if(phase=='play'&&now-roundT>150000)endRound('Time up. Survivors win!')}}
+// menu
+async function go(m){mode=m;$('ui').style.display='none';$('hint').style.display='block';
+if(navigator.xr&&await navigator.xr.isSessionSupported('immersive-vr').catch(()=>0))$('vr').style.display='block'}
+$('vr').onclick=async()=>{const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});R.xr.setSession(s);$('vr').style.display='none';s.addEventListener('end',()=>$('vr').style.display='block')};
+$('join').onclick=async()=>{const m=$('msg');m.textContent='Connecting…';try{const ns=window.claude&&await claude.use('room');if(!ns)throw 0;
+room=$('code').value.toLowerCase().replace(/[^a-z0-9]/g,'')||Math.random().toString(36).slice(2,6);net=await ns.join('gdf-'+room);
+net.on('start',e=>onStart(e.data.m));net.on('end',e=>endRound(e.data.t));net.on('rip',e=>doRip(e.data.to,e.data.part));
+net.on('grab',e=>{if(e.data.to==myId)held={by:e.peer,hd:e.data.hd}});net.on('rel',e=>{if(e.data.to==myId){held=null;vel.set(...e.data.v)}});
+phase='lobby';tp(0,LY+.2,3);say('Room '+room.toUpperCase());go('mp')}catch(e){m.textContent='Multiplayer needs the published page opened while signed in to claude.ai. You can still try practice.'}};
+$('prac').onclick=()=>{phase='play';isMon=true;rig.scale.setScalar(1.25);tp(0,0,2);[[-3,-6],[0,-8],[3,-6],[0,-11]].forEach((p,i)=>mkDummy(i,p[0],p[1]));
+const sg=sign(512,320,3);sg.position.set(0,1.9,-3.5);S.add(sg);sg.draw(['MONSTER PRACTICE','Grip near a part to grab it','Arm: hold, then yank = rip off','Head: hold 1s, yank = kill','Both hands on torso, pull apart = in half','Grab torso, swing, release = throw'],'#ff9a9a');
+const l=new T.PointLight(0xff8855,.8,14);l.position.set(0,3,-4);S.add(l);say('Practice: you are the monster');go('prac')};
+</script></body></html>
